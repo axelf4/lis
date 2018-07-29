@@ -1,0 +1,12 @@
+[package]
+name = "lis"
+version = "0.1.0"
+authors = ["Axel Forsman <axelsfor@gmail.com>"]
+description = "Longest increasing subsequence implementation"
+license = "MIT"
+repository = "https://github.com/axelf4/lis"
+
+[dependencies]
+
+[badges]
+travis-ci = { repository = "axelf4/lis" }
