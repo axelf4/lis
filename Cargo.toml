@@ -2,10 +2,11 @@
 name = "lis"
 version = "0.1.1"
 authors = ["Axel Forsman <axelsfor@gmail.com>"]
-description = "Longest increasing subsequence implementation"
+description = "Longest increasing subsequence algorithm"
 license = "MIT"
 repository = "https://github.com/axelf4/lis"
 readme = "README.md"
+exclude = [".gitignore", ".travis.yml"]
 
 [dependencies]
 

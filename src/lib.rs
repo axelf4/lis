@@ -1,10 +1,8 @@
+use std::cmp::Ordering::{Greater, Less};
+
 /// Returns the indices of the longest increasing subsequence in `a`.
 ///
 /// This is O(n log n).
-///
-/// # Panics
-///
-/// Panics if `a.len()` is zero.
 ///
 /// # Example
 ///
@@ -13,41 +11,33 @@
 /// assert_eq!(longest_increasing_subsequence(&[2, 1, 4, 3, 5]), [1, 3, 4]);
 /// ```
 pub fn longest_increasing_subsequence<T: PartialOrd>(a: &[T]) -> Vec<usize> {
-    let (mut p, mut m) = (vec![0; a.len()], vec![0; a.len()]);
-    let mut l = 1;
+    if a.is_empty() {
+        return Vec::new();
+    }
+    let (mut p, mut m) = (vec![0; a.len()], Vec::with_capacity(a.len()));
+    m.push(0);
+
     for i in 1..a.len() {
         // Test whether a[i] can extend the current sequence
-        let j = m[l - 1];
-        if a[j] < a[i] {
-            p[i] = j;
-            m[l] = i;
-            l += 1;
+        if a[*m.last().unwrap()] < a[i] {
+            p[i] = *m.last().unwrap();
+            m.push(i);
             continue;
         }
 
-        // Binary search
-        let (mut lo, mut hi) = (0, l - 1);
-        while lo < hi {
-            let mid = (lo + hi) / 2;
-            if a[m[mid]] < a[i] {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
+        // Binary search for largest j ≤ m.len() such that a[m[j]] < a[i]
+        let j = match m.binary_search_by(|&j| if a[j] < a[i] { Less } else { Greater }) {
+            Ok(j) | Err(j) => j,
+        };
+        if j > 0 {
+            p[i] = m[j - 1];
         }
-
-        if lo > 0 {
-            p[i] = m[lo - 1];
-        }
-        m[lo] = i;
+        m[j] = i;
     }
 
     // Reconstruct the longest increasing subsequence
-    let mut k = m[l - 1];
-    unsafe {
-        m.set_len(l);
-    }
-    for i in (0..l).rev() {
+    let mut k = *m.last().unwrap();
+    for i in (0..m.len()).rev() {
         m[i] = k;
         k = p[k];
     }
@@ -59,9 +49,8 @@ mod tests {
     use super::*;
 
     #[test]
-    #[should_panic]
     fn len_zero() {
-        longest_increasing_subsequence::<i32>(&[]);
+        assert!(longest_increasing_subsequence::<i32>(&[]).is_empty());
     }
 
     #[test]
