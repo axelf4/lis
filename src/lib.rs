@@ -1,8 +1,8 @@
-use std::cmp::Ordering::{Greater, Less};
+use std::cmp::Ordering::{self, Greater, Less};
 
-/// Returns the indices of the longest increasing subsequence in `a`.
+/// Returns indices of the longest increasing subsequence in `a`.
 ///
-/// This is O(n log n).
+/// This is `O(n log n)` worst-case.
 ///
 /// # Example
 ///
@@ -10,7 +10,23 @@ use std::cmp::Ordering::{Greater, Less};
 /// use lis::longest_increasing_subsequence;
 /// assert_eq!(longest_increasing_subsequence(&[2, 1, 4, 3, 5]), [1, 3, 4]);
 /// ```
-pub fn longest_increasing_subsequence<T: PartialOrd>(a: &[T]) -> Vec<usize> {
+#[inline]
+pub fn longest_increasing_subsequence<T: Ord>(a: &[T]) -> Vec<usize> {
+    longest_increasing_subsequence_by(a, |a, b| a.cmp(b))
+}
+
+/// Returns indices of the longest increasing subsequence in `a` with a comparator function.
+///
+/// # Example
+///
+/// ```
+/// use lis::longest_increasing_subsequence_by;
+/// assert_eq!(longest_increasing_subsequence_by(&[2, 1, 4, 3, 5], |a, b| a.cmp(b)), [1, 3, 4]);
+/// ```
+pub fn longest_increasing_subsequence_by<T, F>(a: &[T], mut f: F) -> Vec<usize>
+where
+    F: FnMut(&T, &T) -> Ordering,
+{
     if a.is_empty() {
         return Vec::new();
     }
@@ -19,14 +35,14 @@ pub fn longest_increasing_subsequence<T: PartialOrd>(a: &[T]) -> Vec<usize> {
 
     for i in 1..a.len() {
         // Test whether a[i] can extend the current sequence
-        if a[*m.last().unwrap()] < a[i] {
+        if f(&a[*m.last().unwrap()], &a[i]) == Less {
             p[i] = *m.last().unwrap();
             m.push(i);
             continue;
         }
 
         // Binary search for largest j ≤ m.len() such that a[m[j]] < a[i]
-        let j = match m.binary_search_by(|&j| if a[j] < a[i] { Less } else { Greater }) {
+        let j = match m.binary_search_by(|&j| f(&a[j], &a[i]).then(Greater)) {
             Ok(j) | Err(j) => j,
         };
         if j > 0 {
