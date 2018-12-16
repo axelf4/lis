@@ -7,8 +7,10 @@ license = "MIT"
 repository = "https://github.com/axelf4/lis"
 readme = "README.md"
 exclude = [".gitignore", ".travis.yml"]
+edition = "2018"
 
 [dependencies]
+rustc-hash = "1.0.1"
 
 [badges]
 travis-ci = { repository = "axelf4/lis" }
