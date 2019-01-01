@@ -238,15 +238,11 @@ pub enum DiffAction<T> {
 /// Moving the returned generator after it has resumed would invalidate the interior reference.
 ///
 /// [enumerate]: std::iter::Iterator::enumerate
-pub fn diff_by_key<I: IntoIterator, T: Eq + Hash, F>(
-    a: I,
-    b: I,
-    mut f: F,
-) -> impl Generator<Yield = DiffAction<I::Item>, Return = ()>
-where
-    I::IntoIter: DoubleEndedIterator,
-    F: FnMut(&I::Item) -> &T,
-{
+pub fn diff_by_key<T, K: Eq + Hash>(
+    a: impl IntoIterator<Item = T, IntoIter = impl DoubleEndedIterator<Item = T>>,
+    b: impl IntoIterator<Item = T, IntoIter = impl DoubleEndedIterator<Item = T>>,
+    mut f: impl FnMut(&T) -> &K,
+) -> impl Generator<Yield = DiffAction<T>, Return = ()> {
     static move || {
         let (mut a, mut b) = (a.into_iter().de_peekable(), b.into_iter().de_peekable());
 
