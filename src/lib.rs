@@ -15,23 +15,27 @@ assert_eq!([2, 1, 4, 3, 5].longest_increasing_subsequence(), [1, 3, 4]);
 Diffing two lists can be done with [diff_by_key]:
 
 ```
-#![feature(generator_trait)]
-use lis::{diff_by_key, DiffAction};
-use std::ops::{Generator, GeneratorState};
-let mut generator = diff_by_key(1..2, 1..3, |x| x);
-assert_eq!(unsafe { generator.resume() }, GeneratorState::Yielded(DiffAction::Unchanged(1, 1)));
-assert_eq!(unsafe { generator.resume() }, GeneratorState::Yielded(DiffAction::Insert(2)));
-assert_eq!(unsafe { generator.resume() }, GeneratorState::Complete(()));
+use lis::{diff_by_key, DiffCallback};
+struct Cb;
+impl DiffCallback<usize> for Cb {
+    fn inserted(&mut self, new: usize) {
+        assert_eq!(new, 2);
+    }
+    fn removed(&mut self, old: usize) {}
+    fn unchanged(&mut self, old: usize, new: usize) {
+        assert_eq!(old, 1);
+        assert_eq!(new, 1);
+    }
+}
+diff_by_key(1..2, 1..3, |x| x, &mut Cb);
 ```
 */
 
 #![deny(missing_docs)]
-#![feature(generators, generator_trait)]
 
 use rustc_hash::FxHashMap;
 use std::cmp::Ordering::{self, Greater, Less};
 use std::hash::Hash;
-use std::ops::Generator;
 
 /// Extends `AsRef<[T]>` with methods for generating longest increasing subsequences.
 pub trait LisExt<T>: AsRef<[T]> {
@@ -109,11 +113,11 @@ impl<S, T> LisExt<T> for S where S: AsRef<[T]> + ?Sized {}
 
 /// Extends `Iterator` with an adapter that is peekable from both ends.
 trait IteratorExt: Iterator {
-    fn de_peekable(self) -> DePeekable<Self>
+    fn de_peekable(self) -> DoubleEndedPeekable<Self>
     where
         Self: Sized + DoubleEndedIterator,
     {
-        DePeekable {
+        DoubleEndedPeekable {
             iter: self,
             front: None,
             back: None,
@@ -126,13 +130,13 @@ impl<T: Iterator> IteratorExt for T {}
 /// A double ended iterator that is peekable.
 #[derive(Clone, Debug)]
 #[must_use = "iterator adaptors are lazy and do nothing unless consumed"]
-struct DePeekable<I: Iterator> {
+struct DoubleEndedPeekable<I: Iterator> {
     iter: I,
     front: Option<Option<I::Item>>,
     back: Option<Option<I::Item>>,
 }
 
-impl<I: Iterator> DePeekable<I> {
+impl<I: Iterator> DoubleEndedPeekable<I> {
     #[inline]
     fn peek(&mut self) -> Option<&I::Item> {
         if self.front.is_none() {
@@ -169,7 +173,7 @@ impl<I: Iterator> DePeekable<I> {
     }
 }
 
-impl<I: Iterator> Iterator for DePeekable<I> {
+impl<I: Iterator> Iterator for DoubleEndedPeekable<I> {
     type Item = I::Item;
     #[inline]
     fn next(&mut self) -> Option<I::Item> {
@@ -198,7 +202,7 @@ impl<I: Iterator> Iterator for DePeekable<I> {
     }
 }
 
-impl<I: DoubleEndedIterator> DoubleEndedIterator for DePeekable<I> {
+impl<I: DoubleEndedIterator> DoubleEndedIterator for DoubleEndedPeekable<I> {
     #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
         self.back
@@ -208,20 +212,22 @@ impl<I: DoubleEndedIterator> DoubleEndedIterator for DePeekable<I> {
     }
 }
 
-impl<I: std::iter::ExactSizeIterator> std::iter::ExactSizeIterator for DePeekable<I> {}
-impl<I: std::iter::FusedIterator> std::iter::FusedIterator for DePeekable<I> {}
+impl<I: std::iter::ExactSizeIterator> std::iter::ExactSizeIterator for DoubleEndedPeekable<I> {}
+impl<I: std::iter::FusedIterator> std::iter::FusedIterator for DoubleEndedPeekable<I> {}
 
-/// A fragment of a diff.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum DiffAction<T> {
-    /// The new element was inserted.
-    Insert(T),
-    /// The element stayed in place. Stores the old and new element, in that order.
-    Unchanged(T, T),
-    /// The element was moved. Stores the old and new element, in that order.
-    Move(T, T),
-    /// The old element was removed.
-    Remove(T),
+/// Gets notified for each step of the diffing process.
+pub trait DiffCallback<T> {
+    /// Called when a new element was inserted.
+    fn inserted(&mut self, new: T);
+    /// Called when an element stayed in place.
+    fn unchanged(&mut self, old: T, new: T);
+    /// Called when an element was removed.
+    fn removed(&mut self, old: T);
+    /// Called when an element was moved.
+    fn moved(&mut self, old: T, new: T) {
+        self.removed(old);
+        self.inserted(new);
+    }
 }
 
 /// Computes the difference between the two iterators with a key extraction function.
@@ -234,100 +240,89 @@ pub enum DiffAction<T> {
 ///
 /// May panic if `a` contains duplicate keys.
 ///
-/// # Safety
-/// Moving the returned generator after it has resumed would invalidate the interior reference.
-///
 /// [enumerate]: std::iter::Iterator::enumerate
 pub fn diff_by_key<T, K: Eq + Hash>(
     a: impl IntoIterator<Item = T, IntoIter = impl DoubleEndedIterator<Item = T>>,
     b: impl IntoIterator<Item = T, IntoIter = impl DoubleEndedIterator<Item = T>>,
     mut f: impl FnMut(&T) -> &K,
-) -> impl Generator<Yield = DiffAction<T>, Return = ()> {
-    static move || {
-        let (mut a, mut b) = (a.into_iter().de_peekable(), b.into_iter().de_peekable());
+    cb: &mut impl DiffCallback<T>,
+) {
+    let (mut a, mut b) = (a.into_iter().de_peekable(), b.into_iter().de_peekable());
 
-        // Sync nodes with same key at start
-        while a
-            .peek()
-            .and_then(|a| b.peek().filter(|&b| f(a) == f(b)))
-            .is_some()
-        {
-            yield DiffAction::Unchanged(a.next().unwrap(), b.next().unwrap());
-        }
+    // Sync nodes with same key at start
+    while a
+        .peek()
+        .and_then(|a| b.peek().filter(|&b| f(a) == f(b)))
+        .is_some()
+    {
+        cb.unchanged(a.next().unwrap(), b.next().unwrap());
+    }
 
-        // Sync nodes with same key at end
-        while a
-            .peek_back()
-            .and_then(|a| b.peek_back().filter(|&b| f(a) == f(b)))
-            .is_some()
-        {
-            yield DiffAction::Unchanged(a.next_back().unwrap(), b.next_back().unwrap());
-        }
+    // Sync nodes with same key at end
+    while a
+        .peek_back()
+        .and_then(|a| b.peek_back().filter(|&b| f(a) == f(b)))
+        .is_some()
+    {
+        cb.unchanged(a.next_back().unwrap(), b.next_back().unwrap());
+    }
 
-        if a.peek().is_none() {
-            // If all of a was synced add remaining from b
-            for x in b.rev() {
-                yield DiffAction::Insert(x);
-            }
-        } else if b.peek().is_none() {
-            // If all of b was synced remove remaining from a
-            for x in a {
-                yield DiffAction::Remove(x);
+    if a.peek().is_none() {
+        return b.rev().for_each(|x| cb.inserted(x)); // If all of a was synced add remaining from b
+    } else if b.peek().is_none() {
+        return a.for_each(|x| cb.removed(x)); // If all of b was synced remove remaining from a
+    }
+
+    let (b, mut sources): (Vec<_>, Vec<_>) = b.map(|x| (x, None)).unzip();
+
+    // Map of keys in b to their respective indices
+    let key_index: FxHashMap<_, _> = b.iter().enumerate().map(|(j, ref x)| (f(x), j)).collect();
+    // Associate elements in `a` to their counterpart in `b`, or remove if nonexistant
+    let (mut last_j, mut moved) = (0, false);
+    for (i, a_elem) in a.enumerate() {
+        if let Some(&j) = key_index.get(&f(&a_elem)) {
+            debug_assert!(sources[j].is_none(), "Duplicate key"); // Catch some instances of dupes
+            sources[j] = Some((i, a_elem));
+
+            if j < last_j {
+                moved = true;
+            } else {
+                last_j = j;
             }
         } else {
-            let (b, mut sources): (Vec<_>, Vec<_>) = b.map(|x| (x, None)).unzip();
-            // Map of keys in b to their respective indices
-            let key_index: FxHashMap<_, _> =
-                b.iter().enumerate().map(|(j, ref x)| (f(x), j)).collect();
+            cb.removed(a_elem);
+        }
+    }
 
-            // Associate elements in `a` to their counterpart in `b`, or remove if non-existant
-            let (mut last_j, mut moved) = (0, false);
-            for (i, a_elem) in a.enumerate() {
-                if let Some(&j) = key_index.get(&f(&a_elem)) {
-                    debug_assert!(sources[j].is_none(), "Duplicate key"); // Catch some instances of dupes
-                    sources[j] = Some((i, a_elem));
-
-                    if j < last_j {
-                        moved = true;
-                    } else {
-                        last_j = j;
-                    }
+    if moved {
+        // Find longest sequence that can remain stationary
+        let mut seq = sources
+            .longest_increasing_subsequence_by(
+                |a, b| a.as_ref().unwrap().0.cmp(&b.as_ref().unwrap().0),
+                Option::is_some,
+            )
+            .into_iter()
+            .rev()
+            .peekable();
+        for (i, (b, source)) in b.into_iter().zip(sources).enumerate().rev() {
+            if let Some((_, a)) = source {
+                if Some(&i) == seq.peek() {
+                    seq.next();
+                    cb.unchanged(a, b);
                 } else {
-                    yield DiffAction::Remove(a_elem);
-                }
-            }
-
-            if moved {
-                // Find longest sequence that can remain stationary
-                let mut seq = sources
-                    .longest_increasing_subsequence_by(
-                        |a, b| a.as_ref().unwrap().0.cmp(&b.as_ref().unwrap().0),
-                        |x| x.is_some(),
-                    )
-                    .into_iter()
-                    .rev()
-                    .peekable();
-                for (i, (b, source)) in b.into_iter().zip(sources).enumerate().rev() {
-                    yield if let Some((_, a)) = source {
-                        if Some(&i) == seq.peek() {
-                            seq.next();
-                            DiffAction::Unchanged(a, b)
-                        } else {
-                            DiffAction::Move(a, b)
-                        }
-                    } else {
-                        DiffAction::Insert(b)
-                    };
+                    cb.moved(a, b);
                 }
             } else {
-                for (b, source) in b.into_iter().zip(sources).rev() {
-                    yield if let Some((_, a)) = source {
-                        DiffAction::Unchanged(a, b)
-                    } else {
-                        DiffAction::Insert(b)
-                    };
-                }
+                cb.inserted(b);
             }
+        }
+    } else {
+        for (b, source) in b.into_iter().zip(sources).rev() {
+            if let Some((_, a)) = source {
+                cb.unchanged(a, b);
+            } else {
+                cb.inserted(b);
+            };
         }
     }
 }
@@ -335,7 +330,6 @@ pub fn diff_by_key<T, K: Eq + Hash>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ops::GeneratorState;
 
     fn powerset<T: Clone>(a: &[T]) -> Vec<Vec<T>> {
         (0..2usize.pow(a.len() as u32))
@@ -350,41 +344,45 @@ mod tests {
     }
 
     fn run_diff<T: Copy + Eq + Hash>(a: &[T], b: &[T]) -> Vec<T> {
-        let mut v = a.to_vec();
-        let mut generator = diff_by_key(a.iter().enumerate(), b.iter().enumerate(), |x| x.1);
-        let mut idx = v.len();
-        let mut last_add_one = 0;
-
-        while let GeneratorState::Yielded(action) = unsafe { generator.resume() } {
-            match action {
-                DiffAction::Insert(i) => {
-                    v.insert(idx, *i.1);
-                }
-                DiffAction::Move(i, j) => {
-                    let remove_idx = v.iter().position(|x| x == i.1).unwrap();
-                    v.remove(remove_idx);
-                    if remove_idx < idx {
-                        idx -= 1;
-                    }
-                    v.insert(idx, *j.1);
-                }
-                DiffAction::Remove(i) => {
-                    let remove_idx = v.iter().position(|x| x == i.1).unwrap();
-                    v.remove(remove_idx);
-                    if remove_idx < idx {
-                        idx -= 1;
-                    }
-                }
-                DiffAction::Unchanged(i, j) => {
-                    if i.0 == last_add_one && i.0 == j.0 {
-                        last_add_one += 1;
-                    } else {
-                        idx = v.iter().position(|x| x == j.1).unwrap();
-                    }
+        struct Cb<T> {
+            v: Vec<T>,
+            idx: usize,
+            last_add_one: usize,
+        }
+        impl<T: Copy + Eq> DiffCallback<(usize, &T)> for Cb<T> {
+            fn inserted(&mut self, new: (usize, &T)) {
+                self.v.insert(self.idx, *new.1);
+            }
+            fn removed(&mut self, old: (usize, &T)) {
+                let remove_idx = self.v.iter().position(|x| x == old.1).unwrap();
+                self.v.remove(remove_idx);
+                if remove_idx < self.idx {
+                    self.idx -= 1;
                 }
             }
+            fn unchanged(&mut self, old: (usize, &T), new: (usize, &T)) {
+                if old.0 == self.last_add_one && old.0 == new.0 {
+                    self.last_add_one += 1;
+                } else {
+                    self.idx = self.v.iter().position(|x| x == new.1).unwrap();
+                }
+            }
+            fn moved(&mut self, old: (usize, &T), new: (usize, &T)) {
+                let remove_idx = self.v.iter().position(|x| x == old.1).unwrap();
+                self.v.remove(remove_idx);
+                if remove_idx < self.idx {
+                    self.idx -= 1;
+                }
+                self.v.insert(self.idx, *new.1);
+            }
         }
-        v
+        let mut cb = Cb {
+            v: a.to_vec(),
+            idx: a.len(),
+            last_add_one: 0,
+        };
+        diff_by_key(a.iter().enumerate(), b.iter().enumerate(), |x| x.1, &mut cb);
+        cb.v
     }
 
     #[test]

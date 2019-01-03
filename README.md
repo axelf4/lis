@@ -7,7 +7,6 @@ Rust implementation of the
 [![Documentation](https://docs.rs/lis/badge.svg)](https://docs.rs/lis)
 
 Also provides a function for diffing lists, that makes use of the LIS algorithm.
-Requires the unstable feature `generators` and thus the nightly compiler.
 
 # Examples
 
@@ -22,11 +21,17 @@ assert_eq!([2, 1, 4, 3, 5].longest_increasing_subsequence(), [1, 3, 4]);
 Diffing two lists can be done with `diff_by_key`:
 
 ```rust
-#![feature(generator_trait)]
-use lis::{diff_by_key, DiffAction};
-use std::ops::{Generator, GeneratorState};
-let mut generator = diff_by_key(1..2, 1..3, |x| x);
-assert_eq!(unsafe { generator.resume() }, GeneratorState::Yielded(DiffAction::Unchanged(1, 1)));
-assert_eq!(unsafe { generator.resume() }, GeneratorState::Yielded(DiffAction::Insert(2)));
-assert_eq!(unsafe { generator.resume() }, GeneratorState::Complete(()));
+use lis::{diff_by_key, DiffCallback};
+struct Cb;
+impl DiffCallback<usize> for Cb {
+    fn inserted(&mut self, new: usize) {
+        assert_eq!(new, 2);
+    }
+    fn removed(&mut self, old: usize) {}
+    fn unchanged(&mut self, old: usize, new: usize) {
+        assert_eq!(old, 1);
+        assert_eq!(new, 1);
+    }
+}
+diff_by_key(1..2, 1..3, |x| x, &mut Cb);
 ```
