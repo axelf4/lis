@@ -274,24 +274,32 @@ pub fn diff_by_key<T, K: Eq + Hash>(
     }
 
     let (b, mut sources): (Vec<_>, Vec<_>) = b.map(|x| (x, None)).unzip();
-
-    // Map of keys in b to their respective indices
-    let key_index: FxHashMap<_, _> = b.iter().enumerate().map(|(j, ref x)| (f(x), j)).collect();
-    // Associate elements in `a` to their counterpart in `b`, or remove if nonexistant
     let (mut last_j, mut moved) = (0, false);
-    for (i, a_elem) in a.enumerate() {
-        if let Some(&j) = key_index.get(&f(&a_elem)) {
+    // Associate elements in `a` to their counterparts in `b`, or remove if nonexistant
+    let assoc = |(i, (j, a_elem)): (_, (Option<usize>, _))| {
+        if let Some(j) = j {
             debug_assert!(sources[j].is_none(), "Duplicate key"); // Catch some instances of dupes
             sources[j] = Some((i, a_elem));
 
             if j < last_j {
                 moved = true;
-            } else {
-                last_j = j;
             }
+            last_j = j;
         } else {
             cb.removed(a_elem);
         }
+    };
+    // If size is small just loop through
+    if b.len() < 4 || a.size_hint().1.map_or(false, |hi| hi | b.len() < 32) {
+        a.map(|a_elem| (b.iter().position(|b_elem| f(&a_elem) == f(b_elem)), a_elem))
+            .enumerate()
+            .for_each(assoc);
+    } else {
+        // Map of keys in b to their respective indices
+        let key_index: FxHashMap<_, _> = b.iter().enumerate().map(|(j, ref x)| (f(x), j)).collect();
+        a.map(|a_elem| (key_index.get(&f(&a_elem)).copied(), a_elem))
+            .enumerate()
+            .for_each(assoc);
     }
 
     if moved {
