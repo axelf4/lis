@@ -33,7 +33,7 @@ diff_by_key(1..2, 1..3, |x| x, &mut Cb);
 
 #![deny(missing_docs)]
 
-use rustc_hash::FxHashMap;
+use fxhash::FxHashMap;
 use std::cmp::Ordering::{self, Greater, Less};
 use std::hash::Hash;
 
