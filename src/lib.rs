@@ -17,7 +17,7 @@ Diffing two lists can be done with [diff_by_key]:
 ```
 use lis::{diff_by_key, DiffCallback};
 struct Cb;
-impl DiffCallback<usize> for Cb {
+impl DiffCallback<usize, usize> for Cb {
     fn inserted(&mut self, new: usize) {
         assert_eq!(new, 2);
     }
@@ -27,7 +27,7 @@ impl DiffCallback<usize> for Cb {
         assert_eq!(new, 1);
     }
 }
-diff_by_key(1..2, 1..3, |x| x, &mut Cb);
+diff_by_key(1..2, |x| x, 1..3, |x| x, &mut Cb);
 ```
 */
 
@@ -216,43 +216,44 @@ impl<I: std::iter::ExactSizeIterator> std::iter::ExactSizeIterator for DoubleEnd
 impl<I: std::iter::FusedIterator> std::iter::FusedIterator for DoubleEndedPeekable<I> {}
 
 /// Gets notified for each step of the diffing process.
-pub trait DiffCallback<T> {
+pub trait DiffCallback<S, T> {
     /// Called when a new element was inserted.
     fn inserted(&mut self, new: T);
     /// Called when an element stayed in place.
-    fn unchanged(&mut self, old: T, new: T);
+    fn unchanged(&mut self, old: S, new: T);
     /// Called when an element was removed.
-    fn removed(&mut self, old: T);
+    fn removed(&mut self, old: S);
     /// Called when an element was moved.
-    fn moved(&mut self, old: T, new: T) {
+    fn moved(&mut self, old: S, new: T) {
         self.removed(old);
         self.inserted(new);
     }
 }
 
-/// Computes the difference between the two iterators with a key extraction function.
+/// Computes the difference between the two iterators with key extraction functions.
 ///
 /// Keys have to be unique. Returns removals in forward order and insertions/moves in reverse order.
 /// Guaranteed not to allocate if the changeset is entirely contiguous insertions or removals.
-/// Result stores `T`:s instead of indices; use [enumerate] if preferable.
+/// Result stores `S`/`T`:s instead of indices; use [enumerate] if preferable.
 ///
 /// # Panics
 ///
 /// May panic if `a` contains duplicate keys.
 ///
 /// [enumerate]: std::iter::Iterator::enumerate
-pub fn diff_by_key<T, K: Eq + Hash>(
-    a: impl IntoIterator<Item = T, IntoIter = impl DoubleEndedIterator<Item = T>>,
+pub fn diff_by_key<S, T, K: Eq + Hash>(
+    a: impl IntoIterator<Item = S, IntoIter = impl DoubleEndedIterator<Item = S>>,
+    mut f: impl FnMut(&S) -> &K,
     b: impl IntoIterator<Item = T, IntoIter = impl DoubleEndedIterator<Item = T>>,
-    mut f: impl FnMut(&T) -> &K,
-    cb: &mut impl DiffCallback<T>,
+    mut g: impl FnMut(&T) -> &K,
+    cb: &mut impl DiffCallback<S, T>,
 ) {
     let (mut a, mut b) = (a.into_iter().de_peekable(), b.into_iter().de_peekable());
 
     // Sync nodes with same key at start
     while a
         .peek()
-        .and_then(|a| b.peek().filter(|&b| f(a) == f(b)))
+        .and_then(|a| b.peek().filter(|&b| f(a) == g(b)))
         .is_some()
     {
         cb.unchanged(a.next().unwrap(), b.next().unwrap());
@@ -261,7 +262,7 @@ pub fn diff_by_key<T, K: Eq + Hash>(
     // Sync nodes with same key at end
     while a
         .peek_back()
-        .and_then(|a| b.peek_back().filter(|&b| f(a) == f(b)))
+        .and_then(|a| b.peek_back().filter(|&b| f(a) == g(b)))
         .is_some()
     {
         cb.unchanged(a.next_back().unwrap(), b.next_back().unwrap());
@@ -291,12 +292,12 @@ pub fn diff_by_key<T, K: Eq + Hash>(
     };
     // If size is small just loop through
     if b.len() < 4 || a.size_hint().1.map_or(false, |hi| hi | b.len() < 32) {
-        a.map(|a_elem| (b.iter().position(|b_elem| f(&a_elem) == f(b_elem)), a_elem))
+        a.map(|a_elem| (b.iter().position(|b_elem| f(&a_elem) == g(b_elem)), a_elem))
             .enumerate()
             .for_each(assoc);
     } else {
         // Map of keys in b to their respective indices
-        let key_index: FxHashMap<_, _> = b.iter().enumerate().map(|(j, ref x)| (f(x), j)).collect();
+        let key_index: FxHashMap<_, _> = b.iter().enumerate().map(|(j, ref x)| (g(x), j)).collect();
         a.map(|a_elem| (key_index.get(&f(&a_elem)).copied(), a_elem))
             .enumerate()
             .for_each(assoc);
@@ -357,31 +358,31 @@ mod tests {
             idx: usize,
             last_add_one: usize,
         }
-        impl<T: Copy + Eq> DiffCallback<(usize, &T)> for Cb<T> {
-            fn inserted(&mut self, new: (usize, &T)) {
-                self.v.insert(self.idx, *new.1);
+        impl<T: Copy + Eq> DiffCallback<(usize, &T), (usize, &T)> for Cb<T> {
+            fn inserted(&mut self, (_j, new): (usize, &T)) {
+                self.v.insert(self.idx, *new);
             }
-            fn removed(&mut self, old: (usize, &T)) {
-                let remove_idx = self.v.iter().position(|x| x == old.1).unwrap();
+            fn removed(&mut self, (_i, old): (usize, &T)) {
+                let remove_idx = self.v.iter().position(|x| x == old).unwrap();
                 self.v.remove(remove_idx);
                 if remove_idx < self.idx {
                     self.idx -= 1;
                 }
             }
-            fn unchanged(&mut self, old: (usize, &T), new: (usize, &T)) {
-                if old.0 == self.last_add_one && old.0 == new.0 {
+            fn unchanged(&mut self, (i, _old): (usize, &T), (j, new): (usize, &T)) {
+                if i == self.last_add_one && i == j {
                     self.last_add_one += 1;
                 } else {
-                    self.idx = self.v.iter().position(|x| x == new.1).unwrap();
+                    self.idx = self.v.iter().position(|x| x == new).unwrap();
                 }
             }
-            fn moved(&mut self, old: (usize, &T), new: (usize, &T)) {
-                let remove_idx = self.v.iter().position(|x| x == old.1).unwrap();
+            fn moved(&mut self, (_i, old): (usize, &T), (_j, new): (usize, &T)) {
+                let remove_idx = self.v.iter().position(|x| x == old).unwrap();
                 self.v.remove(remove_idx);
                 if remove_idx < self.idx {
                     self.idx -= 1;
                 }
-                self.v.insert(self.idx, *new.1);
+                self.v.insert(self.idx, *new);
             }
         }
         let mut cb = Cb {
@@ -389,7 +390,13 @@ mod tests {
             idx: a.len(),
             last_add_one: 0,
         };
-        diff_by_key(a.iter().enumerate(), b.iter().enumerate(), |x| x.1, &mut cb);
+        diff_by_key(
+            a.iter().enumerate(),
+            |x| x.1,
+            b.iter().enumerate(),
+            |x| x.1,
+            &mut cb,
+        );
         cb.v
     }
 

@@ -23,7 +23,7 @@ Diffing two lists can be done with `diff_by_key`:
 ```rust
 use lis::{diff_by_key, DiffCallback};
 struct Cb;
-impl DiffCallback<usize> for Cb {
+impl DiffCallback<usize, usize> for Cb {
     fn inserted(&mut self, new: usize) {
         assert_eq!(new, 2);
     }
@@ -33,5 +33,5 @@ impl DiffCallback<usize> for Cb {
         assert_eq!(new, 1);
     }
 }
-diff_by_key(1..2, 1..3, |x| x, &mut Cb);
+diff_by_key(1..2, |x| x, 1..3, |x| x, &mut Cb);
 ```
