@@ -4,7 +4,7 @@ An implementation of the
 
 # Examples
 
-The main trait exposed by this crate is [LisExt], which is implemented for,
+The main trait exposed by this crate is [`LisExt`], which is implemented for,
 inter alia, arrays:
 
 ```
@@ -12,7 +12,7 @@ use lis::LisExt;
 assert_eq!([2, 1, 4, 3, 5].longest_increasing_subsequence(), [1, 3, 4]);
 ```
 
-Diffing two lists can be done with [diff_by_key]:
+Diffing two lists can be done with [`diff_by_key`]:
 
 ```
 use lis::{diff_by_key, DiffCallback};
@@ -31,7 +31,7 @@ diff_by_key(1..2, |x| x, 1..3, |x| x, &mut Cb);
 ```
 */
 
-#![deny(missing_docs)]
+#![deny(missing_docs, missing_debug_implementations)]
 
 use fxhash::FxHashMap;
 use std::cmp::Ordering::{self, Greater, Less};
@@ -57,7 +57,7 @@ pub trait LisExt<T>: AsRef<[T]> {
     /// The closure `filter` is called on each element. If it returns `false` the element is
     /// skipped, however indices are left intact.
     ///
-    /// This is `O(n log n)` worst-case and allocates at most `2 * 4 * n` bytes.
+    /// This is `O(n log n)` worst-case and allocates at most `2 * size_of<usize>() * n` bytes.
     /// It is based on the method described by Michael L. Fredman (1975) in [*On computing the
     /// length of longest increasing subsequences*](https://doi.org/10.1016/0012-365X(75)90103-X).
     ///
@@ -224,6 +224,8 @@ pub trait DiffCallback<S, T> {
     /// Called when an element was removed.
     fn removed(&mut self, old: S);
     /// Called when an element was moved.
+    ///
+    /// The default definition reduces to calls to [`removed`] and [`inserted`].
     fn moved(&mut self, old: S, new: T) {
         self.removed(old);
         self.inserted(new);
@@ -232,9 +234,10 @@ pub trait DiffCallback<S, T> {
 
 /// Computes the difference between the two iterators with key extraction functions.
 ///
-/// Keys have to be unique. Returns removals in forward order and insertions/moves in reverse order.
-/// Guaranteed not to allocate if the changeset is entirely contiguous insertions or removals.
-/// Result stores `S`/`T`:s instead of indices; use [enumerate] if preferable.
+/// Keys have to be unique. After testing for common prefixes and suffixes, returns removals in
+/// forward order and then insertions/moves in reverse order. Guaranteed not to allocate if the
+/// changeset is entirely contiguous insertions or removals. Result stores `S`/`T`:s instead of
+/// indices; use [enumerate] if preferable.
 ///
 /// # Panics
 ///
@@ -269,9 +272,9 @@ pub fn diff_by_key<S, T, K: Eq + Hash>(
     }
 
     if a.peek().is_none() {
-        return b.rev().for_each(|x| cb.inserted(x)); // If all of a was synced add remaining from b
+        return b.rev().for_each(|x| cb.inserted(x)); // If all of a was synced, add remaining in b
     } else if b.peek().is_none() {
-        return a.for_each(|x| cb.removed(x)); // If all of b was synced remove remaining from a
+        return a.for_each(|x| cb.removed(x)); // If all of b was synced, remove remaining in a
     }
 
     let (b, mut sources): (Vec<_>, Vec<_>) = b.map(|x| (x, None)).unzip();
