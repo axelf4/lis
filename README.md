@@ -1,3 +1,5 @@
+<img src="logo.svg" alt="Logo" align="right" width="175">
+
 # lis
 
 Rust implementation of the
